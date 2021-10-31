@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Optional
 
-#import datasets
+import os
+import datasets
 import torch
 from pytorch_lightning import LightningDataModule, LightningModule, Trainer, seed_everything
 from torch.utils.data import DataLoader
@@ -60,6 +61,7 @@ class GLUEDataModule(LightningDataModule):
         max_seq_length: int = 128,
         train_batch_size: int = 32,
         eval_batch_size: int = 32,
+        num_workers: int = 2,
         **kwargs,
     ):
         super().__init__()
@@ -92,19 +94,19 @@ class GLUEDataModule(LightningDataModule):
         AutoTokenizer.from_pretrained(self.model_name_or_path, use_fast=True)
 
     def train_dataloader(self):
-        return DataLoader(self.dataset["train"], batch_size=self.train_batch_size)
+        return DataLoader(self.dataset["train"], batch_size=self.train_batch_size,num_workers=self.num_workers)
 
     def val_dataloader(self):
         if len(self.eval_splits) == 1:
-            return DataLoader(self.dataset["validation"], batch_size=self.eval_batch_size)
+            return DataLoader(self.dataset["validation"], batch_size=self.eval_batch_size,num_workers=self.num_workers)
         elif len(self.eval_splits) > 1:
-            return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size) for x in self.eval_splits]
+            return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size,num_workers=self.num_workers) for x in self.eval_splits]
 
     def test_dataloader(self):
         if len(self.eval_splits) == 1:
-            return DataLoader(self.dataset["test"], batch_size=self.eval_batch_size)
+            return DataLoader(self.dataset["test"], batch_size=self.eval_batch_size,num_workers=self.num_workers)
         elif len(self.eval_splits) > 1:
-            return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size) for x in self.eval_splits]
+            return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size,num_workers=self.num_workers) for x in self.eval_splits]
 
     def convert_to_features(self, example_batch, indices=None):
 
@@ -262,16 +264,13 @@ def argparser():
 def main():
     args = argparser()
     AVAIL_GPUS = min(1, torch.cuda.device_count())
+    NUM_WORKERS = int(os.cpu_count() / 2)
     print(f"AVAIL_GPUS: {AVAIL_GPUS}")
-    # dm = GLUEDataModule("distilbert-base-uncased")
-    # dm.prepare_data()
-    # dm.setup("fit")
-    # next(iter(dm.train_dataloader()))
 
     seed_everything(42)
 
     # Train
-    dm = GLUEDataModule(model_name_or_path=args.arch, task_name=args.task)
+    dm = GLUEDataModule(model_name_or_path=args.arch, task_name=args.task,num_workers=NUM_WORKERS)
     dm.setup("fit")
     model = GLUETransformer(
         model_name_or_path=args.arch,
