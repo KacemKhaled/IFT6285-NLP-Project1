@@ -6,14 +6,6 @@ import datasets
 import torch
 from pytorch_lightning import LightningDataModule, LightningModule, Trainer, seed_everything
 from torch.utils.data import DataLoader
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.loggers import TensorBoardLogger
-from torchmetrics.functional import accuracy #, precision, recall, f1, average_precision, confusion_matrix
-import torch.nn.functional as F
-from pytorch_lightning.callbacks import LearningRateMonitor
-
-
-
 from transformers import (
     AdamW,
     AutoConfig,
@@ -31,6 +23,12 @@ class GLUEDataModule(LightningDataModule):
         "sst2": ["sentence"],
         "mrpc": ["sentence1", "sentence2"],
         "qqp": ["question1", "question2"],
+        "stsb": ["sentence1", "sentence2"],
+        "mnli": ["premise", "hypothesis"],
+        "qnli": ["question", "sentence"],
+        "rte": ["sentence1", "sentence2"],
+        "wnli": ["sentence1", "sentence2"],
+        "ax": ["premise", "hypothesis"],
     }
 
     glue_task_num_labels = {
@@ -38,6 +36,12 @@ class GLUEDataModule(LightningDataModule):
         "sst2": 2,
         "mrpc": 2,
         "qqp": 2,
+        "stsb": 1,
+        "mnli": 3,
+        "qnli": 2,
+        "rte": 2,
+        "wnli": 2,
+        "ax": 3,
     }
 
     loader_columns = [
@@ -66,7 +70,6 @@ class GLUEDataModule(LightningDataModule):
         self.max_seq_length = max_seq_length
         self.train_batch_size = train_batch_size
         self.eval_batch_size = eval_batch_size
-        self.num_workers = num_workers
 
         self.text_fields = self.task_text_field_map[task_name]
         self.num_labels = self.glue_task_num_labels[task_name]
@@ -146,7 +149,7 @@ class GLUETransformer(LightningModule):
         self.save_hyperparameters()
 
         self.config = AutoConfig.from_pretrained(model_name_or_path, num_labels=num_labels)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)#, config=self.config)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path, config=self.config)
         self.metric = datasets.load_metric(
             "glue", self.hparams.task_name, experiment_id=datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
         )
@@ -155,68 +158,44 @@ class GLUETransformer(LightningModule):
         return self.model(**inputs)
 
     def training_step(self, batch, batch_idx):
-        # x, y = batch
-        y = batch['labels']
         outputs = self(**batch)
-        loss, logits =  outputs[:2]
-        if self.hparams.num_labels >= 1:
-            preds = torch.argmax(logits, axis=1)
-        elif self.hparams.num_labels == 1:
-            preds = logits.squeeze()
-        # logits = self(x)
-        # loss = F.nll_loss(logits, y)
-        # preds = torch.argmax(logits, dim=1)
-        
-        # precision, recall, f1, average_precision, confusion_matrix
-        acc = accuracy(preds, y)
-
-        # self.log("train_loss", loss, on_epoch=True) # on_step=True, on_epoch=False
-        # self.log("train_acc", acc, on_epoch=True) # on_step=True, on_epoch=False
-
-        metrics = {'train_loss':loss, 'train_acc':acc}
-        self.log_dict(metrics,on_epoch=True ,prog_bar=True)
+        loss = outputs[0]
         return loss
 
-    def evaluate(self, batch, stage=None):
-        # x, y = batch
-        y = batch['labels']
+    def validation_step(self, batch, batch_idx, dataloader_idx=0):
         outputs = self(**batch)
-        loss, logits =  outputs[:2]
+        val_loss, logits = outputs[:2]
+
         if self.hparams.num_labels >= 1:
             preds = torch.argmax(logits, axis=1)
         elif self.hparams.num_labels == 1:
             preds = logits.squeeze()
-        # logits = self(x)
-        # loss = F.nll_loss(logits, y)
-        # preds = torch.argmax(logits, dim=1)
-        acc = accuracy(preds, y)
 
-        if stage:
-            stage = ''
-            self.log(f"{stage}_loss", loss, prog_bar=True,  on_epoch=True) # on_step=False, on_epoch=True
-            self.log(f"{stage}_acc", acc, prog_bar=True,  on_epoch=True) # on_step=False, on_epoch=True
-            metrics = {f'{stage}_loss': loss, f"{stage}_acc": acc}
-            self.log_dict(self.metric.compute(predictions=preds, references=y), prog_bar=True)
-            # if stage=='test':
-            #     metrics.update({
-            #         'precision': precision(preds, y),
-            #         'recall' : recall(preds, y),
-            #         'f1_score' : f1(preds, y),
-            #         #'avg_precision' : average_precision(preds, y),
-            #         #'confusion_matrix' : confusion_matrix(preds, y,num_classes=2),
-            #         })
-            # self.log_dict(metrics, prog_bar=True)
+        labels = batch["labels"]
 
-        return metrics
+        return {"loss": val_loss, "preds": preds, "labels": labels}
 
-    def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        metrics = self.evaluate(batch, "val")
-        return metrics
-        
+    def validation_epoch_end(self, outputs):
+        if self.hparams.task_name == "mnli":
+            for i, output in enumerate(outputs):
+                # matched or mismatched
+                split = self.hparams.eval_splits[i].split("_")[-1]
+                preds = torch.cat([x["preds"] for x in output]).detach().cpu().numpy()
+                labels = torch.cat([x["labels"] for x in output]).detach().cpu().numpy()
+                loss = torch.stack([x["loss"] for x in output]).mean()
+                self.log(f"val_loss_{split}", loss, prog_bar=True)
+                split_metrics = {
+                    f"{k}_{split}": v for k, v in self.metric.compute(predictions=preds, references=labels).items()
+                }
+                self.log_dict(split_metrics, prog_bar=True)
+            return loss
 
-    # def test_step(self, batch, batch_idx):
-    #     metrics = self.evaluate(batch, "test")
-    #     return metrics
+        preds = torch.cat([x["preds"] for x in outputs]).detach().cpu().numpy()
+        labels = torch.cat([x["labels"] for x in outputs]).detach().cpu().numpy()
+        loss = torch.stack([x["loss"] for x in outputs]).mean()
+        self.log("val_loss", loss, prog_bar=True)
+        self.log_dict(self.metric.compute(predictions=preds, references=labels), prog_bar=True)
+        return loss
 
     def setup(self, stage=None) -> None:
         if stage != "fit":
@@ -256,7 +235,7 @@ class GLUETransformer(LightningModule):
 import argparse
 
 def argparser():
-    model_names = ['gpt2', 'bert-base-uncased', 'bert-base-cased', 'distilbert-base-uncased-finetuned-sst-2-english', 'roberta-large', 'roberta-base', 'roberta-large', 'albert-base-v2', 'distilbert-base-cased']
+    model_names = ["albert-base-v2", "distilbert-base-cased", "distilbert-base-uncased"]
     tasks = ["cola", "mrpc"] 
     parser = argparse.ArgumentParser(description='NLP Project 1')
     parser.add_argument('--data', metavar='DIR',default='./data',
@@ -285,8 +264,7 @@ def argparser():
 def main():
     args = argparser()
     AVAIL_GPUS = min(1, torch.cuda.device_count())
-    NUM_WORKERS = 0 # int(os.cpu_count() / 2)
-    TOKENIZERS_PARALLELISM = True 
+    NUM_WORKERS = int(os.cpu_count() / 2)
     print(f"AVAIL_GPUS: {AVAIL_GPUS}")
 
     seed_everything(42)
@@ -301,17 +279,8 @@ def main():
         task_name=dm.task_name,
     )
 
-    model_version = f"{args.task}--a-{args.arch}--e-{args.epochs}"
-    trainer = Trainer(
-        max_epochs=args.epochs, 
-        gpus=AVAIL_GPUS,
-        logger=WandbLogger(save_dir="lightning_logs/",name=model_version,log_model=True),
-        #logger=TensorBoardLogger("lightning_logs/", name="cola",default_hp_metric=False),
-        callbacks=[LearningRateMonitor(logging_interval="step")]
-
-        )
+    trainer = Trainer(max_epochs=args.epochs, gpus=AVAIL_GPUS)
     trainer.fit(model, dm)
-    # trainer.test(model, dm)
 
 
 

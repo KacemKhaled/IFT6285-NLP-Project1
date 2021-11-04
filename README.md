@@ -13,7 +13,8 @@ conda deactivate
 ```
 ```bash
 conda install pytorch==1.9.0 torchvision==0.10.0 torchaudio==0.9.0 cudatoolkit=11.1 -c pytorch -c conda-forge
-conda install cudatoolkit=10.2 -c pytorch -c conda-forge
+conda install pytorch==1.9.0 torchvision==0.10.0 torchaudio==0.9.0 cudatoolkit=10.2 -c pytorch
+
 ```
 
 To install requirements from requirements.txt
