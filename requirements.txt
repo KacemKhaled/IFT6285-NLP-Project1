@@ -14,3 +14,4 @@ scipy
 # - cudatoolkit==10.2
 tensorboard
 wandb == 0.12.5
+sentencepiece

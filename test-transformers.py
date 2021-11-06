@@ -8,11 +8,34 @@ from pytorch_lightning import LightningDataModule, LightningModule, Trainer, see
 from torch.utils.data import DataLoader
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.loggers import TensorBoardLogger
-from torchmetrics.functional import accuracy #, precision, recall, f1, average_precision, confusion_matrix
+from torchmetrics.functional import accuracy, precision, recall, f1, average_precision
+from torchmetrics.functional import confusion_matrix, matthews_corrcoef
 import torch.nn.functional as F
 from pytorch_lightning.callbacks import LearningRateMonitor
+from sklearn.metrics import classification_report, recall_score, precision_score
+from sklearn.metrics import accuracy_score, average_precision_score, f1_score
+from sklearn.metrics import matthews_corrcoef as mcc
+import numpy as np
+from torch.optim.lr_scheduler import OneCycleLR
+from sklearn.metrics import classification_report
 
 
+from transformers import BertConfig, BertForSequenceClassification, BertTokenizer
+from transformers import RobertaConfig, RobertaTokenizer, RobertaForSequenceClassification
+# from module.san_model import SanModel
+MODEL_CLASSES = {
+    "bert": (BertConfig, BertForSequenceClassification, BertTokenizer),
+    # "xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
+    "roberta": (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
+    # "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
+    # "xlm": (XLMRobertaConfig, XLMRobertaModel, XLMRobertaTokenizer),
+    # # "san": (BertConfig, SanModel, BertTokenizer),
+    # "electra": (ElectraConfig, ElectraModel, ElectraTokenizer),
+    # "t5": (T5Config, T5EncoderModel, T5Tokenizer),
+    # "deberta": (DebertaConfig, DebertaModel, DebertaTokenizer),
+    # "t5g": (T5Config, T5ForConditionalGeneration, T5Tokenizer),
+}
+BATCH_SIZE = 16 #32
 
 from transformers import (
     AdamW,
@@ -55,8 +78,8 @@ class GLUEDataModule(LightningDataModule):
         model_name_or_path: str,
         task_name: str = "mrpc",
         max_seq_length: int = 128,
-        train_batch_size: int = 32,
-        eval_batch_size: int = 32,
+        train_batch_size: int = BATCH_SIZE,
+        eval_batch_size: int = BATCH_SIZE,
         num_workers: int = 2,
         **kwargs,
     ):
@@ -124,38 +147,71 @@ class GLUEDataModule(LightningDataModule):
         return features
 
 
+def print_params(model):
+    # Get all of the model's parameters as a list of tuples.
+    params = list(model.named_parameters())
+
+    print('The BERT model has {:} different named parameters.\n'.format(len(params)))
+
+    print('==== Embedding Layer ====\n')
+
+    for p in params[0:5]:
+        print("{:<55} {:>12}".format(p[0], str(tuple(p[1].size()))))
+
+    print('\n==== First Transformer ====\n')
+
+    for p in params[5:21]:
+        print("{:<55} {:>12}".format(p[0], str(tuple(p[1].size()))))
+
+    print('\n==== Output Layer ====\n')
+
+    for p in params[-4:]:
+        print("{:<55} {:>12}".format(p[0], str(tuple(p[1].size()))))
 
 
 class GLUETransformer(LightningModule):
     def __init__(
         self,
         model_name_or_path: str,
-        num_labels: int,
-        task_name: str,
-        learning_rate: float = 2e-5,
+        num_labels: int = 2,
+        task_name: str = "mrpc",
+        learning_rate: float = 5e-5,#0.05,#2e-5, #best of 5e-5, 3e-5, 2e-5 , 6e-5
         adam_epsilon: float = 1e-8,
         warmup_steps: int = 0,
         weight_decay: float = 0.0,
-        train_batch_size: int = 32,
-        eval_batch_size: int = 32,
+        train_batch_size: int = BATCH_SIZE,#32,
+        eval_batch_size: int = BATCH_SIZE,
         eval_splits: Optional[list] = None,
         **kwargs,
     ):
         super().__init__()
 
         self.save_hyperparameters()
-
-        self.config = AutoConfig.from_pretrained(model_name_or_path, num_labels=num_labels)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)#, config=self.config)
+        config_class, model_class, tokenizer_class = MODEL_CLASSES["bert"]
+        self.config = AutoConfig.from_pretrained(model_name_or_path, num_labels=num_labels) #AutoConfig
+        # AutoModelForSequenceClassification
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name_or_path, 
+            config=self.config,
+            #num_labels = 2, # The number of output labels--2 for binary classification.
+            #output_attentions = False, # Whether the model returns attentions weights.
+            #output_hidden_states = False, # Whether the model returns all hidden-states.
+            )
+        print_params(self.model)
         self.metric = datasets.load_metric(
             "glue", self.hparams.task_name, experiment_id=datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
         )
 
     def forward(self, **inputs):
+        # outputs = self.model(**inputs)
+        # out =  outputs[1]
+        # return F.log_softmax(out, dim=1)
         return self.model(**inputs)
+    # def forward(self, x):
+    #     out = self.model(x)
+    #     return F.log_softmax(out, dim=1)
 
     def training_step(self, batch, batch_idx):
-        # x, y = batch
         y = batch['labels']
         outputs = self(**batch)
         loss, logits =  outputs[:2]
@@ -163,6 +219,9 @@ class GLUETransformer(LightningModule):
             preds = torch.argmax(logits, axis=1)
         elif self.hparams.num_labels == 1:
             preds = logits.squeeze()
+        #loss = F.nll_loss(logits, y)
+
+        # x, y = batch
         # logits = self(x)
         # loss = F.nll_loss(logits, y)
         # preds = torch.argmax(logits, dim=1)
@@ -178,7 +237,7 @@ class GLUETransformer(LightningModule):
         return loss
 
     def evaluate(self, batch, stage=None):
-        # x, y = batch
+        
         y = batch['labels']
         outputs = self(**batch)
         loss, logits =  outputs[:2]
@@ -186,32 +245,53 @@ class GLUETransformer(LightningModule):
             preds = torch.argmax(logits, axis=1)
         elif self.hparams.num_labels == 1:
             preds = logits.squeeze()
+        # x, y = batch
         # logits = self(x)
         # loss = F.nll_loss(logits, y)
         # preds = torch.argmax(logits, dim=1)
         acc = accuracy(preds, y)
 
         if stage:
-            stage = ''
-            self.log(f"{stage}_loss", loss, prog_bar=True,  on_epoch=True) # on_step=False, on_epoch=True
-            self.log(f"{stage}_acc", acc, prog_bar=True,  on_epoch=True) # on_step=False, on_epoch=True
+            # self.log(f"{stage}_loss", loss, prog_bar=True,  on_epoch=True) # on_step=False, on_epoch=True
+            # self.log(f"{stage}_acc", acc, prog_bar=True,  on_epoch=True) # on_step=False, on_epoch=True
             metrics = {f'{stage}_loss': loss, f"{stage}_acc": acc}
-            self.log_dict(self.metric.compute(predictions=preds, references=y), prog_bar=True)
-            # if stage=='test':
-            #     metrics.update({
-            #         'precision': precision(preds, y),
-            #         'recall' : recall(preds, y),
-            #         'f1_score' : f1(preds, y),
-            #         #'avg_precision' : average_precision(preds, y),
-            #         #'confusion_matrix' : confusion_matrix(preds, y,num_classes=2),
-            #         })
-            # self.log_dict(metrics, prog_bar=True)
+            # self.log_dict(self.metric.compute(predictions=preds, references=y), prog_bar=True)
+            self.log_dict(metrics, prog_bar=True)
+            metrics_table={
+                'precision': precision(preds, y,average='macro',num_classes=2),
+                'recall' : recall(preds, y,average='macro',num_classes=2),
+                'f1_score' : f1(preds, y,average='macro',num_classes=2),
+                #'avg_precision' : average_precision(preds, y),
+                'mcc':matthews_corrcoef(preds, y,num_classes=2),
+                
+                }
+            self.log_dict(metrics_table, prog_bar=True)
+            y_np = y.cpu().detach().numpy()
+            preds_np = preds.cpu().detach().numpy()
+            metrics_table_sk={
+                # 'precision sk': precision_score(y_np,preds_np,average='macro'),
+                # 'recall sk' : recall_score(y_np,preds_np,average='macro'),
+                # 'f1_score w' : f1_score(y_np,preds_np,average='weighted'),
+                #'avg_precision' : average_precision(preds, y),
+                'mcc sk':mcc(y_np,preds_np),
+                #'classification_report':classification_report(y_np,preds_np)
+                
+                }
+
+            self.log_dict(metrics_table_sk, prog_bar=True)
+            cs_report = classification_report(y_np,preds_np,output_dict=True)
+            print(cs_report)
+            self.log_dict(cs_report, prog_bar=True)
+            #self.log('confusion_matrix' , confusion_matrix(preds, y,num_classes=2), prog_bar=False)
+
 
         return metrics
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         metrics = self.evaluate(batch, "val")
-        return metrics
+        return metrics['val_loss']
+    
+    
         
 
     # def test_step(self, batch, batch_idx):
@@ -229,6 +309,25 @@ class GLUETransformer(LightningModule):
         ab_size = self.trainer.accumulate_grad_batches * float(self.trainer.max_epochs)
         self.total_steps = (len(train_loader.dataset) // tb_size) // ab_size
 
+    # def configure_optimizers(self):
+    #     optimizer = torch.optim.SGD(
+    #         self.parameters(),
+    #         lr=self.hparams.learning_rate,
+    #         momentum=0.9,
+    #         weight_decay=5e-4,
+    #     )
+    #     #steps_per_epoch = 45000 // BATCH_SIZE
+    #     print('----------self.total_steps : ',int(self.total_steps))
+    #     scheduler_dict = {
+    #         "scheduler": OneCycleLR(
+    #             optimizer,
+    #             0.1,
+    #             epochs=self.trainer.max_epochs,
+    #             steps_per_epoch=116 #int(self.total_steps), 
+    #         ),
+    #         "interval": "step",
+    #     }
+    #     return {"optimizer": optimizer, "lr_scheduler": scheduler_dict}
     def configure_optimizers(self):
         """Prepare optimizer and schedule (linear warmup and decay)"""
         model = self.model
@@ -243,7 +342,7 @@ class GLUETransformer(LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-        optimizer = AdamW(optimizer_grouped_parameters, lr=self.hparams.learning_rate, eps=self.hparams.adam_epsilon)
+        optimizer = AdamW(optimizer_grouped_parameters, lr=self.hparams.learning_rate, eps=self.hparams.adam_epsilon) # .hparams.
 
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
@@ -256,7 +355,9 @@ class GLUETransformer(LightningModule):
 import argparse
 
 def argparser():
-    model_names = ['gpt2', 'bert-base-uncased', 'bert-base-cased', 'distilbert-base-uncased-finetuned-sst-2-english', 'roberta-large', 'roberta-base', 'roberta-large', 'albert-base-v2', 'distilbert-base-cased']
+    model_names = ['gpt2', 'bert-base-uncased', 'bert-base-cased','bert-large-cased',
+    'distilbert-base-uncased', 'distilbert-base-uncased-finetuned-sst-2-english', 
+    'roberta-large', 'roberta-base', 'roberta-large', 'albert-base-v2', 'distilbert-base-cased']
     tasks = ["cola", "mrpc"] 
     parser = argparse.ArgumentParser(description='NLP Project 1')
     parser.add_argument('--data', metavar='DIR',default='./data',
@@ -272,11 +373,11 @@ def argparser():
                              ' (default: cola)')
     parser.add_argument('--epochs', default=2, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+    parser.add_argument('--lr', '--learning_rate', default=5e-5, type=float,
                         metavar='LR', help='initial learning rate', dest='lr')
-    parser.add_argument('-b', '--batch-size', default=256, type=int,
+    parser.add_argument('-b', '--batch_size', default=16, type=int,
                         metavar='N',
-                        help='mini-batch size (default: 256)')
+                        help='mini-batch size (default: 16)')
 
     return parser.parse_args()
 
@@ -284,6 +385,8 @@ def argparser():
 
 def main():
     args = argparser()
+    params = vars(args)
+    print(params)
     AVAIL_GPUS = min(1, torch.cuda.device_count())
     NUM_WORKERS = 0 # int(os.cpu_count() / 2)
     TOKENIZERS_PARALLELISM = True 
@@ -292,23 +395,31 @@ def main():
     seed_everything(42)
 
     # Train
-    dm = GLUEDataModule(model_name_or_path=args.arch, task_name=args.task,num_workers=NUM_WORKERS)
+    dm = GLUEDataModule(
+        model_name_or_path = params['arch'], 
+        task_name = params['task'],
+        num_workers = NUM_WORKERS,
+        train_batch_size = params['batch_size'],
+        eval_batch_size = params['batch_size']
+        )
     dm.setup("fit")
     model = GLUETransformer(
-        model_name_or_path=args.arch,
-        num_labels=dm.num_labels,
-        eval_splits=dm.eval_splits,
-        task_name=dm.task_name,
+        model_name_or_path = params['arch'],
+        num_labels = dm.num_labels,
+        eval_splits = dm.eval_splits,
+        task_name = dm.task_name,
+        learning_rate = params['lr'],
+        train_batch_size = params['batch_size'],
+        eval_batch_size = params['batch_size']
     )
 
-    model_version = f"{args.task}--a-{args.arch}--e-{args.epochs}"
+    model_version = f"{args.task}-{args.arch}--e-{args.epochs}--lr-{model.hparams.learning_rate}--batch-{model.hparams.train_batch_size}"
     trainer = Trainer(
-        max_epochs=args.epochs, 
-        gpus=AVAIL_GPUS,
-        logger=WandbLogger(save_dir="lightning_logs/",name=model_version,log_model=True),
-        #logger=TensorBoardLogger("lightning_logs/", name="cola",default_hp_metric=False),
-        callbacks=[LearningRateMonitor(logging_interval="step")]
-
+            max_epochs=args.epochs, 
+            gpus=AVAIL_GPUS,
+            logger=WandbLogger(project='IFT6285-NLP-Project1',save_dir="lightning_logs/",name=model_version,log_model=False),
+            #logger=TensorBoardLogger("lightning_logs/", name="cola",default_hp_metric=False),
+            # callbacks=[LearningRateMonitor(logging_interval="step")]
         )
     trainer.fit(model, dm)
     # trainer.test(model, dm)
