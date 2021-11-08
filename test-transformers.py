@@ -22,19 +22,7 @@ from sklearn.metrics import classification_report
 
 from transformers import BertConfig, BertForSequenceClassification, BertTokenizer
 from transformers import RobertaConfig, RobertaTokenizer, RobertaForSequenceClassification
-# from module.san_model import SanModel
-MODEL_CLASSES = {
-    "bert": (BertConfig, BertForSequenceClassification, BertTokenizer),
-    # "xlnet": (XLNetConfig, XLNetModel, XLNetTokenizer),
-    "roberta": (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
-    # "albert": (AlbertConfig, AlbertModel, AlbertTokenizer),
-    # "xlm": (XLMRobertaConfig, XLMRobertaModel, XLMRobertaTokenizer),
-    # # "san": (BertConfig, SanModel, BertTokenizer),
-    # "electra": (ElectraConfig, ElectraModel, ElectraTokenizer),
-    # "t5": (T5Config, T5EncoderModel, T5Tokenizer),
-    # "deberta": (DebertaConfig, DebertaModel, DebertaTokenizer),
-    # "t5g": (T5Config, T5ForConditionalGeneration, T5Tokenizer),
-}
+
 BATCH_SIZE = 16 #32
 
 from transformers import (
@@ -187,7 +175,7 @@ class GLUETransformer(LightningModule):
         super().__init__()
 
         self.save_hyperparameters()
-        config_class, model_class, tokenizer_class = MODEL_CLASSES["bert"]
+
         self.config = AutoConfig.from_pretrained(model_name_or_path, num_labels=num_labels) #AutoConfig
         # AutoModelForSequenceClassification
         self.model = AutoModelForSequenceClassification.from_pretrained(
@@ -271,7 +259,7 @@ class GLUETransformer(LightningModule):
             metrics_table_sk={
                 # 'precision sk': precision_score(y_np,preds_np,average='macro'),
                 # 'recall sk' : recall_score(y_np,preds_np,average='macro'),
-                # 'f1_score w' : f1_score(y_np,preds_np,average='weighted'),
+                'f1_score sk' : f1_score(y_np,preds_np),
                 #'avg_precision' : average_precision(preds, y),
                 'mcc sk':mcc(y_np,preds_np),
                 #'classification_report':classification_report(y_np,preds_np)
@@ -355,7 +343,7 @@ class GLUETransformer(LightningModule):
 import argparse
 
 def argparser():
-    model_names = ['gpt2', 'bert-base-uncased', 'bert-base-cased','bert-large-cased',
+    model_names = ['gpt2', 'bert-base-uncased', 'bert-base-cased','bert-large-cased','albert-large-v2',
     'distilbert-base-uncased', 'distilbert-base-uncased-finetuned-sst-2-english', 
     'roberta-large', 'roberta-base', 'roberta-large', 'albert-base-v2', 'distilbert-base-cased']
     tasks = ["cola", "mrpc"] 
