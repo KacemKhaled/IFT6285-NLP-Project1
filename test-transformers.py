@@ -25,6 +25,9 @@ from transformers import RobertaConfig, RobertaTokenizer, RobertaForSequenceClas
 
 BATCH_SIZE = 16 #32
 
+
+
+
 from transformers import (
     AdamW,
     AutoConfig,
@@ -96,6 +99,9 @@ class GLUEDataModule(LightningDataModule):
             self.dataset[split].set_format(type="torch", columns=self.columns)
 
         self.eval_splits = [x for x in self.dataset.keys() if "validation" in x]
+        print(self.dataset)
+        print(self.eval_splits)
+
 
     def prepare_data(self):
         datasets.load_dataset("glue", self.task_name)
@@ -111,10 +117,30 @@ class GLUEDataModule(LightningDataModule):
             return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size,num_workers=self.num_workers) for x in self.eval_splits]
 
     def test_dataloader(self):
-        if len(self.eval_splits) == 1:
+            print(self.dataset["test"])
+        # if len(self.eval_splits) == 1:
+            print('test data loader')
             return DataLoader(self.dataset["test"], batch_size=self.eval_batch_size,num_workers=self.num_workers)
-        elif len(self.eval_splits) > 1:
-            return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size,num_workers=self.num_workers) for x in self.eval_splits]
+        # elif len(self.eval_splits) > 1:
+        #     return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size,num_workers=self.num_workers) for x in self.eval_splits]
+
+    # def predict_dataloader(self):
+    #     manual_data = {
+
+    #     }
+    #     self.dataset = datasets.load_dataset("glue", self.task_name)
+
+    #     for split in self.dataset.keys():
+    #         self.dataset[split] = self.dataset[split].map(
+    #             self.convert_to_features,
+    #             batched=True,
+    #             remove_columns=["label"],
+    #         )
+    #         self.columns = [c for c in self.dataset[split].column_names if c in self.loader_columns]
+    #         self.dataset[split].set_format(type="torch", columns=self.columns)
+
+        
+    #     return DataLoader(self.dataset["test"], batch_size=self.eval_batch_size,num_workers=self.num_workers)
 
     def convert_to_features(self, example_batch, indices=None):
 
@@ -191,6 +217,9 @@ class GLUETransformer(LightningModule):
         )
 
     def forward(self, **inputs):
+        print('----------------------------')
+        print(inputs)
+        print('----------------------------')
         # outputs = self.model(**inputs)
         # out =  outputs[1]
         # return F.log_softmax(out, dim=1)
@@ -246,11 +275,11 @@ class GLUETransformer(LightningModule):
             # self.log_dict(self.metric.compute(predictions=preds, references=y), prog_bar=True)
             self.log_dict(metrics, prog_bar=True)
             metrics_table={
-                'precision': precision(preds, y,average='macro',num_classes=2),
-                'recall' : recall(preds, y,average='macro',num_classes=2),
-                'f1_score' : f1(preds, y,average='macro',num_classes=2),
+                f'{stage}_precision': precision(preds, y,average='macro',num_classes=2),
+                f'{stage}_recall' : recall(preds, y,average='macro',num_classes=2),
+                f'{stage}_f1_score' : f1(preds, y,average='macro',num_classes=2),
                 #'avg_precision' : average_precision(preds, y),
-                'mcc':matthews_corrcoef(preds, y,num_classes=2),
+                f'{stage}_mcc':matthews_corrcoef(preds, y,num_classes=2),
                 
                 }
             self.log_dict(metrics_table, prog_bar=True)
@@ -259,9 +288,9 @@ class GLUETransformer(LightningModule):
             metrics_table_sk={
                 # 'precision sk': precision_score(y_np,preds_np,average='macro'),
                 # 'recall sk' : recall_score(y_np,preds_np,average='macro'),
-                'f1_score sk' : f1_score(y_np,preds_np),
+                f'{stage}_f1_score sk' : f1_score(y_np,preds_np),
                 #'avg_precision' : average_precision(preds, y),
-                'mcc sk':mcc(y_np,preds_np),
+                f'{stage}_mcc sk':mcc(y_np,preds_np),
                 #'classification_report':classification_report(y_np,preds_np)
                 
                 }
@@ -269,7 +298,7 @@ class GLUETransformer(LightningModule):
             self.log_dict(metrics_table_sk, prog_bar=True)
             cs_report = classification_report(y_np,preds_np,output_dict=True)
             print(cs_report)
-            self.log_dict(cs_report, prog_bar=True)
+            self.log_dict(cs_report, prog_bar=False)#
             #self.log('confusion_matrix' , confusion_matrix(preds, y,num_classes=2), prog_bar=False)
 
 
@@ -282,9 +311,10 @@ class GLUETransformer(LightningModule):
     
         
 
-    # def test_step(self, batch, batch_idx):
-    #     metrics = self.evaluate(batch, "test")
-    #     return metrics
+    def test_step(self, batch, batch_idx):
+        print('Testing step')
+        metrics = self.evaluate(batch, "test")
+        return metrics
 
     def setup(self, stage=None) -> None:
         if stage != "fit":
@@ -294,7 +324,7 @@ class GLUETransformer(LightningModule):
 
         # Calculate total steps
         tb_size = self.hparams.train_batch_size * max(1, self.trainer.gpus)
-        ab_size = self.trainer.accumulate_grad_batches * float(self.trainer.max_epochs)
+        ab_size = float(self.trainer.accumulate_grad_batches) #* float(self.trainer.max_epochs) # TODO
         self.total_steps = (len(train_loader.dataset) // tb_size) // ab_size
 
     # def configure_optimizers(self):
@@ -369,7 +399,8 @@ def argparser():
 
     return parser.parse_args()
 
-
+def prediction_data_loader():
+    pass
 
 def main():
     args = argparser()
@@ -405,12 +436,24 @@ def main():
     trainer = Trainer(
             max_epochs=args.epochs, 
             gpus=AVAIL_GPUS,
-            logger=WandbLogger(project='IFT6285-NLP-Project1',save_dir="lightning_logs/",name=model_version,log_model=False),
+            logger=WandbLogger(project='IFT6285-NLP-Project1-runs-1',save_dir="lightning_logs/",name=model_version,log_model=False),#save_dir="lightning_logs/"
             #logger=TensorBoardLogger("lightning_logs/", name="cola",default_hp_metric=False),
             # callbacks=[LearningRateMonitor(logging_interval="step")]
         )
-    trainer.fit(model, dm)
-    # trainer.test(model, dm)
+    # trainer.fit(model, train_dataloader=dm.train_dataloader(),val_dataloaders=dm.val_dataloader())
+    # dm.setup("test")
+    model = GLUETransformer.load_from_checkpoint('Models/MRPC/albert.ckpt')
+
+    trainer.test(model, test_dataloaders=dm.test_dataloader())
+    # trainer.test(model, test_dataloaders=dm.test_dataloader())
+    # model = GLUETransformer.load_from_checkpoint('Models/MRPC/albert.ckpt')
+    # model.freeze()
+    # trainer.predict(model,dataloaders=dm.test_dataloader())
+    # setup your data loader
+    # test_dataloader = DataLoader(...)
+
+    # # test (pass in the loader)
+    # trainer.test(dataloaders=test_dataloader)
 
 
 

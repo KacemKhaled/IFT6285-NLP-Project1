@@ -6,25 +6,10 @@
 
 # task = MRPC
 t=mrpc 
-# for a in albert-base-v2 bert-base-cased roberta-large bert-large-cased albert-large-v2; do
-# 	for lr in  6e-5  5e-5  4e-5 2e-5 ; do
-# 		for b in 128 64 32 16 ; do
-# 			e=5
-# 			logfile=task-$t--arch-$a--epochs-$e
-# 			echo "-----------------------------------------------------------------------"
-# 			echo "Training --arch $a --task $t --epochs $e "
-# 			python test-transformers.py --arch $a --task $t --epochs $e --batch_size $b --lr $lr #2> logs/$log_file.log
-# 			echo "-----------------------------------------------------------------------"
-# 		done
-# 	done
-# done
-
-# #python test-transformers.py --arch albert-base-v2 --task cola --epochs 2
-
-for a in albert-large-v2 ; do
-	for lr in  4e-5; do
-		for b in 16  8; do
-			e=5
+for a in albert-base-v2 bert-base-cased roberta-base albert-large-v2 bert-large-cased roberta-large ; do
+	for lr in  6e-5  5e-5  4e-5 2e-5 ; do
+		for b in 64 32 16 8 ; do
+			e=1
 			logfile=task-$t--arch-$a--epochs-$e
 			echo "-----------------------------------------------------------------------"
 			echo "Training --arch $a --task $t --epochs $e "
@@ -33,17 +18,9 @@ for a in albert-large-v2 ; do
 		done
 	done
 done
-# for a in albert-base-v2 bert-base-cased roberta-large bert-large-cased albert-large-v2; do
-# 	for lr in  6e-5  5e-5  4e-5 2e-5 ; do
-# 		for b in 8 ; do
-# 			e=5
-# 			logfile=task-$t--arch-$a--epochs-$e
-# 			echo "-----------------------------------------------------------------------"
-# 			echo "Training --arch $a --task $t --epochs $e "
-# 			python test-transformers.py --arch $a --task $t --epochs $e --batch_size $b --lr $lr #2> logs/$log_file.log
-# 			echo "-----------------------------------------------------------------------"
-# 		done
-# 	done
-# done
+
+# #python test-transformers.py --arch albert-base-v2 --task cola --epochs 2
+
 
 #python test-transformers.py --arch albert-base-v2 --task cola --epochs 2
+# best mdoels 
